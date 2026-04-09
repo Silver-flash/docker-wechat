@@ -19,7 +19,7 @@ docker run -d --name wechat \
   -p 6080:6080 -p 7070:7070 \
   -v $PWD/data/home:/home/wechat \
   --shm-size=256m \
-  ghcr.io/silver-flash/docker-wechat:latest
+  ghcr.io/silver-flash/Docker-Wechat:latest
 ```
 
 右下角有个浮动小按钮，写着 `En` 或 `中`，点一下切输入法。中文走的是 ibus + 智能拼音，跟桌面系统体感差不多。
