@@ -30,8 +30,6 @@ docker compose logs -f
 
 聊天记录、登录态、图片、配置，全都在项目根目录的 `./data/home` 下。Docker 删了重建都没事，想备份直接打包这个文件夹就行。
 
-⚠️ 记得把 `data/` 加进 `.gitignore`，别一不小心把聊天记录推到 GitHub 上。
-
 ## 它是怎么搭起来的
 
 ```
