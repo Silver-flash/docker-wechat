@@ -13,12 +13,12 @@ html, body {
 /* ── IME toggle button ──────────────────────────────────────────────── */
 #ime-btn {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  top: 16px;
+  left: 16px;
   z-index: 99999;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
+  width: 40px;
+  height: 32px;
+  border-radius: 8px;
   background: #444;
   color: #bbb;
   font-size: 13px;
@@ -32,8 +32,19 @@ html, body {
   justify-content: center;
   transition: background 0.2s, transform 0.15s;
   user-select: none;
+  touch-action: none;
+  opacity: 0.72;
 }
-#ime-btn:hover { transform: scale(1.08); }
+#ime-btn:hover,
+#ime-btn:focus-visible {
+  opacity: 1;
+  transform: scale(1.04);
+}
+#ime-btn.dragging {
+  cursor: grabbing;
+  opacity: 1;
+  transform: none;
+}
 /* Green = Chinese Pinyin active */
 #ime-btn.cn { background: #07c160; color: #fff; }
 

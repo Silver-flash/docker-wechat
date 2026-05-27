@@ -1073,6 +1073,33 @@
 			var btn   = document.getElementById('ime-btn');
 			var toast = document.getElementById('wx-toast');
 			var toastTimer;
+			var drag = null;
+			var suppressClick = false;
+
+			function clamp(value, min, max) {
+				return Math.max(min, Math.min(max, value));
+			}
+
+			function placeButton(left, top) {
+				var maxLeft = Math.max(0, window.innerWidth - btn.offsetWidth - 8);
+				var maxTop = Math.max(0, window.innerHeight - btn.offsetHeight - 8);
+				btn.style.left = clamp(left, 8, maxLeft) + 'px';
+				btn.style.top = clamp(top, 8, maxTop) + 'px';
+				btn.style.right = 'auto';
+				btn.style.bottom = 'auto';
+			}
+
+			try {
+				var savedPos = JSON.parse(localStorage.getItem('wx-ime-button-position') || 'null');
+				if (savedPos && typeof savedPos.left === 'number' && typeof savedPos.top === 'number') {
+					placeButton(savedPos.left, savedPos.top);
+				}
+			}
+			catch (e) {}
+
+			window.addEventListener('resize', function() {
+				placeButton(btn.offsetLeft, btn.offsetTop);
+			});
 
 			function showToast(msg, isError) {
 				toast.textContent = msg;
@@ -1107,8 +1134,67 @@
 					.catch(function() {});
 			}, 2000);
 
+			btn.addEventListener('pointerdown', function(e) {
+				if (e.button && e.button !== 0) {
+					return;
+				}
+				drag = {
+					x: e.clientX,
+					y: e.clientY,
+					left: btn.offsetLeft,
+					top: btn.offsetTop,
+					moved: false
+				};
+				btn.classList.add('dragging');
+				if (btn.setPointerCapture) {
+					btn.setPointerCapture(e.pointerId);
+				}
+			});
+
+			btn.addEventListener('pointermove', function(e) {
+				if (!drag) {
+					return;
+				}
+				var dx = e.clientX - drag.x;
+				var dy = e.clientY - drag.y;
+				if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 4) {
+					return;
+				}
+				drag.moved = true;
+				placeButton(drag.left + dx, drag.top + dy);
+				e.preventDefault();
+			});
+
+			btn.addEventListener('pointerup', function(e) {
+				if (!drag) {
+					return;
+				}
+				var moved = drag.moved;
+				drag = null;
+				btn.classList.remove('dragging');
+				if (btn.releasePointerCapture) {
+					btn.releasePointerCapture(e.pointerId);
+				}
+				if (moved) {
+					try {
+						localStorage.setItem('wx-ime-button-position', JSON.stringify({
+							left: btn.offsetLeft,
+							top: btn.offsetTop
+						}));
+					}
+					catch (err) {}
+					suppressClick = true;
+					setTimeout(function() { suppressClick = false; }, 0);
+					e.preventDefault();
+					e.stopPropagation();
+				}
+			});
+
 			// Toggle on click
 			btn.addEventListener('click', function() {
+				if (suppressClick) {
+					return;
+				}
 				fetch(API + '/toggle-ime', { method: 'POST' })
 					.then(function(r) { return r.json(); })
 					.then(function(d) {
