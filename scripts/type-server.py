@@ -16,11 +16,56 @@ def _env():
     return {**os.environ, "DISPLAY": DISPLAY}
 
 
+def _engine_for_state(state):
+    return "libpinyin" if state == "中" else "xkb:us::eng"
+
+
+def _state_for_engine(engine):
+    return "中" if engine == "libpinyin" else "En"
+
+
+def _current_ime():
+    """Return IBus' actual engine when available, falling back to our mirror."""
+    try:
+        r = subprocess.run(
+            ["ibus", "engine"],
+            env=_env(),
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if r.returncode == 0:
+            return _state_for_engine(r.stdout.strip())
+    except subprocess.TimeoutExpired:
+        pass
+    return _ime
+
+
 def _apply_ime(state):
     """Switch ibus engine between English keyboard and libpinyin."""
-    env = _env()
-    engine = "libpinyin" if state == "中" else "xkb:us::eng"
-    subprocess.run(["ibus", "engine", engine], env=env, check=False)
+    engine = _engine_for_state(state)
+    try:
+        r = subprocess.run(
+            ["ibus", "engine", engine],
+            env=_env(),
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        if _current_ime() == state:
+            return True, ""
+        return False, "ibus engine timed out"
+
+    if _current_ime() == state:
+        return True, ""
+
+    if r.returncode != 0:
+        details = (r.stderr or r.stdout or "").strip()
+        return False, details or "ibus engine failed"
+    return True, ""
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -30,7 +75,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        global _ime
+
         if self.path == "/ime-status":
+            _ime = _current_ime()
             self._json({"state": _ime})
         else:
             self.send_response(404)
@@ -40,9 +88,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         global _ime
 
         if self.path == "/toggle-ime":
-            _ime = "中" if _ime == "En" else "En"
-            _apply_ime(_ime)
-            self._json({"state": _ime})
+            _ime = _current_ime()
+            target = "中" if _ime == "En" else "En"
+            ok, error = _apply_ime(target)
+            if ok:
+                _ime = target
+                self._json({"state": _ime})
+            else:
+                self._json({"state": _ime, "error": error}, status=500)
             return
 
         if self.path == "/paste":
@@ -98,9 +151,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def _json(self, obj):
+    def _json(self, obj, status=200):
         body = json.dumps(obj).encode()
-        self.send_response(200)
+        self.send_response(status)
         self._cors()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -115,4 +168,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-http.server.HTTPServer(("0.0.0.0", 7070), Handler).serve_forever()
+http.server.ThreadingHTTPServer(("0.0.0.0", 7070), Handler).serve_forever()

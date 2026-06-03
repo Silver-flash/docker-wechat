@@ -1120,16 +1120,25 @@
 				}
 			}
 
+			function readJson(r) {
+				return r.json().then(function(d) {
+					if (!r.ok) {
+						throw d;
+					}
+					return d;
+				});
+			}
+
 			// Fetch initial state
 			fetch(API + '/ime-status')
-				.then(function(r) { return r.json(); })
+				.then(readJson)
 				.then(function(d) { applyState(d.state); })
 				.catch(function() {});
 
 			// Keep in sync if user presses Ctrl+Space directly
 			setInterval(function() {
 				fetch(API + '/ime-status')
-					.then(function(r) { return r.json(); })
+					.then(readJson)
 					.then(function(d) { applyState(d.state); })
 					.catch(function() {});
 			}, 2000);
@@ -1196,13 +1205,16 @@
 					return;
 				}
 				fetch(API + '/toggle-ime', { method: 'POST' })
-					.then(function(r) { return r.json(); })
+					.then(readJson)
 					.then(function(d) {
 						applyState(d.state);
 						showToast(d.state === '中' ? '中文拼音输入' : '英文输入');
 					})
-					.catch(function() {
-						showToast('无法连接输入服务（:7070）', true);
+					.catch(function(d) {
+						if (d && d.state) {
+							applyState(d.state);
+						}
+						showToast('输入法切换失败', true);
 					});
 			});
 		})();
