@@ -51,8 +51,8 @@ dconf write /desktop/ibus/general/engines-order "['xkb:us::eng', 'libpinyin']" 2
 
 # The web button switches engines explicitly, so keep IBus' own hotkeys hidden.
 # The panel and config processes are still needed for reliable libpinyin
-# startup, but the monitor below moves their windows away so they cannot cover
-# WeChat.
+# startup, but the monitor below hides their control windows so they cannot
+# cover WeChat.
 dconf write /desktop/ibus/general/hotkey/triggers "@as []" 2>/dev/null || true
 dconf write /desktop/ibus/general/hotkey/next-engine "@as []" 2>/dev/null || true
 dconf write /desktop/ibus/general/hotkey/previous-engine "@as []" 2>/dev/null || true
@@ -96,98 +96,45 @@ if ! kill -0 \$WECHAT_PID 2>/dev/null; then
 fi
 echo "[WRAPPER] WeChat still running after 2s — OK" >> /tmp/wechat.log
 
-# Background monitor: every 3 s keep WeChat window visible and centered/maximized
+# Background monitor: hide only IBus control/placeholder windows.
+# Do not raise, activate, maximize, or move WeChat windows here: WeChat uses
+# child windows for image previews, popups, and some input surfaces, and forced
+# main-window activation will cover them.
 (
-LAST_MOVE_TARGET=""
-LAST_PARK_LOGGED=0
 while kill -0 \$WECHAT_PID 2>/dev/null; do
     sleep 3
 
     # Old IBus panel windows may survive briefly after daemon replacement.
-    # Hide only the tiny panel/control windows that Xpra can expose as a
-    # clickable layer. Larger ibus-ui windows may be real pinyin candidates.
+    # Hide only panel/control windows that Xpra can expose as a clickable layer.
     for IBUS_WIN in \$(
         (xdotool search --all --name "IBus Panel" 2>/dev/null; \
-         xdotool search --all --name "ibus-ui-gtk3" 2>/dev/null; \
          xdotool search --all --name "IBus Preferences" 2>/dev/null; \
          xdotool search --all --name "ibus-setup" 2>/dev/null) | sort -u
     ); do
         IBUS_NAME=\$(xdotool getwindowname "\$IBUS_WIN" 2>/dev/null || true)
-        IBUS_GEOM=\$(xdotool getwindowgeometry "\$IBUS_WIN" 2>/dev/null || true)
-        IBUS_W=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: \K[0-9]+')
-        IBUS_H=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+')
         if [ "\$IBUS_NAME" = "IBus Panel" ] || [ "\$IBUS_NAME" = "IBus Preferences" ] || [ "\$IBUS_NAME" = "ibus-setup" ]; then
             xdotool windowunmap "\$IBUS_WIN" 2>/dev/null || true
-        elif [ "\$IBUS_NAME" = "ibus-ui-gtk3" ] && [ -n "\$IBUS_W" ] && [ -n "\$IBUS_H" ] && [ "\$IBUS_W" -le 32 ] && [ "\$IBUS_H" -le 32 ]; then
+        fi
+    done
+
+    # ibus-ui-gtk3 also owns the pinyin candidate/preedit UI. Leave normal
+    # candidate windows alone; only hide the 1x1 off-screen placeholder that
+    # Xpra may otherwise treat as a visible click target.
+    for IBUS_WIN in \$(xdotool search --all --name "ibus-ui-gtk3" 2>/dev/null | sort -u); do
+        IBUS_NAME=\$(xdotool getwindowname "\$IBUS_WIN" 2>/dev/null || true)
+        IBUS_GEOM=\$(xdotool getwindowgeometry "\$IBUS_WIN" 2>/dev/null || true)
+        IBUS_X=\$(echo "\$IBUS_GEOM" | grep -oP 'Position: \K-?[0-9]+')
+        IBUS_Y=\$(echo "\$IBUS_GEOM" | grep -oP 'Position: -?[0-9]+,\K-?[0-9]+')
+        IBUS_W=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: \K[0-9]+')
+        IBUS_H=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+')
+        if [ "\$IBUS_NAME" = "ibus-ui-gtk3" ] && \
+           [ -n "\$IBUS_X" ] && [ -n "\$IBUS_Y" ] && \
+           [ -n "\$IBUS_W" ] && [ -n "\$IBUS_H" ] && \
+           [ "\$IBUS_W" -le 4 ] && [ "\$IBUS_H" -le 4 ] && \
+           { [ "\$IBUS_X" -le -1000 ] || [ "\$IBUS_Y" -le -1000 ]; }; then
             xdotool windowunmap "\$IBUS_WIN" 2>/dev/null || true
         fi
     done
-
-    # Search by PID and prefer the largest real WeChat window. The old tail -1
-    # selection could pick transient helper windows and leave the app behind.
-    WIN=""
-    WIN_AREA=0
-    for CANDIDATE in \$(xdotool search --pid \$WECHAT_PID 2>/dev/null); do
-        CANDIDATE_GEOM=\$(xdotool getwindowgeometry "\$CANDIDATE" 2>/dev/null)
-        CANDIDATE_W=\$(echo "\$CANDIDATE_GEOM" | grep -oP 'Geometry: \K[0-9]+')
-        CANDIDATE_H=\$(echo "\$CANDIDATE_GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+')
-        [ -z "\$CANDIDATE_W" ] || [ -z "\$CANDIDATE_H" ] && continue
-        if [ "\$CANDIDATE_W" -lt 120 ] || [ "\$CANDIDATE_H" -lt 120 ]; then
-            continue
-        fi
-        CANDIDATE_AREA=\$(( CANDIDATE_W * CANDIDATE_H ))
-        if [ "\$CANDIDATE_AREA" -gt "\$WIN_AREA" ]; then
-            WIN="\$CANDIDATE"
-            WIN_AREA="\$CANDIDATE_AREA"
-        fi
-    done
-    [ -z "\$WIN" ] && continue
-
-    # Get current display and window geometry
-    read DISP_W DISP_H < <(xdotool getdisplaygeometry 2>/dev/null)
-    WIN_GEOM=\$(xdotool getwindowgeometry "\$WIN" 2>/dev/null)
-    WIN_X=\$(echo "\$WIN_GEOM" | grep -oP 'Position: \K-?[0-9]+')
-    WIN_Y=\$(echo "\$WIN_GEOM" | grep -oP 'Position: -?[0-9]+,\K-?[0-9]+')
-    WIN_W=\$(echo "\$WIN_GEOM" | grep -oP 'Geometry: \K[0-9]+')
-    WIN_H=\$(echo "\$WIN_GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+')
-
-    [ -z "\$DISP_W" ] || [ -z "\$DISP_H" ] || [ -z "\$WIN_X" ] || [ -z "\$WIN_Y" ] || [ -z "\$WIN_W" ] || [ -z "\$WIN_H" ] && continue
-
-    # Before a browser client connects, Xpra uses a very large placeholder
-    # display. Keep WeChat near the origin instead of centering against that
-    # placeholder, otherwise persisted window positions can land far outside
-    # the eventual browser canvas.
-    if [ "\$DISP_W" -ge 5600 ] && [ "\$DISP_H" -ge 2500 ]; then
-        if [ "\$WIN_X" -lt 0 ] || [ "\$WIN_Y" -lt 0 ] || [ "\$WIN_X" -gt 800 ] || [ "\$WIN_Y" -gt 600 ]; then
-            xdotool windowmove "\$WIN" 100 100 2>/dev/null || true
-            if [ "\$LAST_PARK_LOGGED" -eq 0 ]; then
-                echo "[MONITOR] Parked window near origin while waiting for browser client" >> /tmp/wechat.log
-                LAST_PARK_LOGGED=1
-            fi
-        fi
-        xdotool windowraise "\$WIN" 2>/dev/null || true
-        xdotool windowactivate "\$WIN" 2>/dev/null || true
-        continue
-    fi
-
-    # If window is off-screen or nearly so, center it
-    MAX_X=\$(( DISP_W - WIN_W ))
-    MAX_Y=\$(( DISP_H - WIN_H ))
-    if [ "\$WIN_X" -gt "\$MAX_X" ] || [ "\$WIN_Y" -gt "\$MAX_Y" ] 2>/dev/null; then
-        CENTER_X=\$(( (DISP_W - WIN_W) / 2 ))
-        CENTER_Y=\$(( (DISP_H - WIN_H) / 2 ))
-        xdotool windowmove "\$WIN" "\$CENTER_X" "\$CENTER_Y" 2>/dev/null
-        MOVE_TARGET="\${CENTER_X},\${CENTER_Y}"
-        if [ "\$MOVE_TARGET" != "\$LAST_MOVE_TARGET" ]; then
-            echo "[MONITOR] Moved window to center (\${CENTER_X},\${CENTER_Y})" >> /tmp/wechat.log
-            LAST_MOVE_TARGET="\$MOVE_TARGET"
-        fi
-    fi
-
-    # Try to maximize if the window allows it (main window after login)
-    xdotool windowmaximize "\$WIN" 2>/dev/null || true
-    xdotool windowraise "\$WIN" 2>/dev/null || true
-    xdotool windowactivate "\$WIN" 2>/dev/null || true
 done
 ) &
 
