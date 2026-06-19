@@ -40,6 +40,18 @@ eval \$(dbus-launch --sh-syntax 2>/dev/null) || true
 export XMODIFIERS=@im=ibus
 export GTK_IM_MODULE=ibus
 export QT_IM_MODULE=ibus
+export XDG_CURRENT_DESKTOP=GNOME
+export DESKTOP_SESSION=gnome
+export GDK_BACKEND=x11
+export NO_AT_BRIDGE=1
+
+ensure_ibus_panel() {
+    if [ -x /usr/libexec/ibus-ui-gtk3 ] && \
+       ! pgrep -u "\$(id -u)" -f '/usr/libexec/ibus-ui-gtk3' >/dev/null 2>&1; then
+        /usr/libexec/ibus-ui-gtk3 >> /tmp/wechat.log 2>&1 &
+        echo "[WRAPPER] ibus-ui-gtk3 PID=\$!" >> /tmp/wechat.log
+    fi
+}
 
 # Refresh ibus engine cache so libpinyin is discoverable
 ibus write-cache --system 2>/dev/null || ibus write-cache 2>/dev/null || true
@@ -58,7 +70,7 @@ dconf write /desktop/ibus/general/hotkey/next-engine "@as []" 2>/dev/null || tru
 dconf write /desktop/ibus/general/hotkey/previous-engine "@as []" 2>/dev/null || true
 
 # Start ibus-daemon with X11 backend (now it will pick up the preloaded engines)
-ibus-daemon -drx --emoji-extension=disable 2>/dev/null &
+ibus-daemon -d -r -x -R --emoji-extension=disable >> /tmp/wechat.log 2>&1 &
 
 # Wait until ibus is responsive
 for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -72,6 +84,7 @@ done
 # Default to English keyboard; the toggle button switches to libpinyin
 ibus engine xkb:us::eng 2>/dev/null || true
 echo "[WRAPPER] ibus engines: \$(ibus list-engine 2>/dev/null | grep -E 'libpinyin|xkb:us' | tr '\n' ' ')" >> /tmp/wechat.log
+ensure_ibus_panel
 
 # Start UTF-8 clipboard injection + IME toggle server
 python3 /scripts/type-server.py &
@@ -103,6 +116,7 @@ echo "[WRAPPER] WeChat still running after 2s — OK" >> /tmp/wechat.log
 (
 while kill -0 \$WECHAT_PID 2>/dev/null; do
     sleep 3
+    ensure_ibus_panel
 
     # Old IBus panel windows may survive briefly after daemon replacement.
     # Hide only panel/control windows that Xpra can expose as a clickable layer.
@@ -113,25 +127,6 @@ while kill -0 \$WECHAT_PID 2>/dev/null; do
     ); do
         IBUS_NAME=\$(xdotool getwindowname "\$IBUS_WIN" 2>/dev/null || true)
         if [ "\$IBUS_NAME" = "IBus Panel" ] || [ "\$IBUS_NAME" = "IBus Preferences" ] || [ "\$IBUS_NAME" = "ibus-setup" ]; then
-            xdotool windowunmap "\$IBUS_WIN" 2>/dev/null || true
-        fi
-    done
-
-    # ibus-ui-gtk3 also owns the pinyin candidate/preedit UI. Leave normal
-    # candidate windows alone; only hide the 1x1 off-screen placeholder that
-    # Xpra may otherwise treat as a visible click target.
-    for IBUS_WIN in \$(xdotool search --all --name "ibus-ui-gtk3" 2>/dev/null | sort -u); do
-        IBUS_NAME=\$(xdotool getwindowname "\$IBUS_WIN" 2>/dev/null || true)
-        IBUS_GEOM=\$(xdotool getwindowgeometry "\$IBUS_WIN" 2>/dev/null || true)
-        IBUS_X=\$(echo "\$IBUS_GEOM" | grep -oP 'Position: \K-?[0-9]+')
-        IBUS_Y=\$(echo "\$IBUS_GEOM" | grep -oP 'Position: -?[0-9]+,\K-?[0-9]+')
-        IBUS_W=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: \K[0-9]+')
-        IBUS_H=\$(echo "\$IBUS_GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+')
-        if [ "\$IBUS_NAME" = "ibus-ui-gtk3" ] && \
-           [ -n "\$IBUS_X" ] && [ -n "\$IBUS_Y" ] && \
-           [ -n "\$IBUS_W" ] && [ -n "\$IBUS_H" ] && \
-           [ "\$IBUS_W" -le 4 ] && [ "\$IBUS_H" -le 4 ] && \
-           { [ "\$IBUS_X" -le -1000 ] || [ "\$IBUS_Y" -le -1000 ]; }; then
             xdotool windowunmap "\$IBUS_WIN" 2>/dev/null || true
         fi
     done
