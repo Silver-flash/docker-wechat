@@ -26,6 +26,33 @@ touch /tmp/wechat.log
 chown wechat:wechat /tmp/wechat.log
 tail -f /tmp/wechat.log &
 
+patch_xpra_keyboard_bug() {
+    local xpra_keyboard="/usr/lib/python3/dist-packages/xpra/x11/server_keyboard_config.py"
+    [ -f "${xpra_keyboard}" ] || return 0
+
+    if grep -q "def do_get_keycode_new(self, client_keycode, keyname, pressed, modifiers, group):" "${xpra_keyboard}"; then
+        sed -i \
+            -e "s/return self.do_get_keycode_new(client_keycode, keyname, pressed, modifiers, group)/return self.do_get_keycode_new(client_keycode, keyname, pressed, modifiers, keystr, group)/" \
+            -e "s/def do_get_keycode_new(self, client_keycode, keyname, pressed, modifiers, group):/def do_get_keycode_new(self, client_keycode, keyname, pressed, modifiers, keystr, group):/" \
+            "${xpra_keyboard}"
+        echo "[INFO] Patched xpra keyboard keystr bug"
+    fi
+}
+
+cleanup_stale_x_display() {
+    mkdir -p /tmp/.X11-unix
+    chmod 1777 /tmp/.X11-unix
+    chown root:root /tmp/.X11-unix 2>/dev/null || true
+
+    if [ -f /tmp/.X1-lock ] && ! pgrep -f 'X(vfb|org).*:1' >/dev/null 2>&1; then
+        rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+        echo "[INFO] Removed stale X display :1 lock"
+    fi
+}
+
+patch_xpra_keyboard_bug
+cleanup_stale_x_display
+
 # Write wrapper to /tmp (NOT /home/wechat — that path is bind-mounted from
 # the host and would shadow anything we put there).
 WRAPPER=/tmp/run-wechat.sh
@@ -62,9 +89,7 @@ dconf write /desktop/ibus/general/preload-engines "['xkb:us::eng', 'libpinyin']"
 dconf write /desktop/ibus/general/engines-order "['xkb:us::eng', 'libpinyin']" 2>/dev/null || true
 
 # The web button switches engines explicitly, so keep IBus' own hotkeys hidden.
-# The panel and config processes are still needed for reliable libpinyin
-# startup, but the monitor below hides their control windows so they cannot
-# cover WeChat.
+# Keep ibus-ui-gtk3 running so libpinyin can show its candidate panel.
 dconf write /desktop/ibus/general/hotkey/triggers "@as []" 2>/dev/null || true
 dconf write /desktop/ibus/general/hotkey/next-engine "@as []" 2>/dev/null || true
 dconf write /desktop/ibus/general/hotkey/previous-engine "@as []" 2>/dev/null || true
@@ -109,30 +134,6 @@ if ! kill -0 \$WECHAT_PID 2>/dev/null; then
 fi
 echo "[WRAPPER] WeChat still running after 2s — OK" >> /tmp/wechat.log
 
-# Background monitor: hide only IBus control/placeholder windows.
-# Do not raise, activate, maximize, or move WeChat windows here: WeChat uses
-# child windows for image previews, popups, and some input surfaces, and forced
-# main-window activation will cover them.
-(
-while kill -0 \$WECHAT_PID 2>/dev/null; do
-    sleep 3
-    ensure_ibus_panel
-
-    # Old IBus panel windows may survive briefly after daemon replacement.
-    # Hide only panel/control windows that Xpra can expose as a clickable layer.
-    for IBUS_WIN in \$(
-        (xdotool search --all --name "IBus Panel" 2>/dev/null; \
-         xdotool search --all --name "IBus Preferences" 2>/dev/null; \
-         xdotool search --all --name "ibus-setup" 2>/dev/null) | sort -u
-    ); do
-        IBUS_NAME=\$(xdotool getwindowname "\$IBUS_WIN" 2>/dev/null || true)
-        if [ "\$IBUS_NAME" = "IBus Panel" ] || [ "\$IBUS_NAME" = "IBus Preferences" ] || [ "\$IBUS_NAME" = "ibus-setup" ]; then
-            xdotool windowunmap "\$IBUS_WIN" 2>/dev/null || true
-        fi
-    done
-done
-) &
-
 wait \$WECHAT_PID
 echo "[WRAPPER] WeChat ended (exit \$?)" >> /tmp/wechat.log
 EOF
@@ -147,6 +148,8 @@ su - wechat -c "
     xpra start :1 \
       --bind-ws=0.0.0.0:6080 \
       --html=on \
+      --socket-dir=/run/user/1000/xpra \
+      --socket-dirs=/run/user/1000/xpra \
       --start-child=${WRAPPER} \
       --exit-with-children=no \
       --no-daemon \
